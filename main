@@ -1,0 +1,134 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <pthread.h>
+#include <unistd.h>
+
+#define N 10
+
+enum { THINKING, HUNGRY, EATING } states[N];
+pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t c = PTHREAD_MUTEX_INITIALIZER;
+
+typedef struct {
+    int owner;
+    pthread_cond_t cv;
+    int clean;
+    int requested;
+} Fork;
+
+Fork forks[N];
+
+void give_away(Fork *fork, int phil_id) {
+    if (phil_id == fork->owner) {
+        return;
+    }
+
+    if (fork->clean) {
+        fork->requested = 1;
+    } else {
+        fork->clean = 1;
+        fork->owner = phil_id;
+    }
+}
+
+void *start_eating(void *arg) {
+    int phil_id = *((int *)arg);
+    pthread_mutex_lock(&mtx);
+    states[phil_id] = HUNGRY;
+    pthread_mutex_lock(&c);
+    printf("Philosopher %d is hungry.\n", phil_id);
+    pthread_mutex_unlock(&c);
+
+    int left_fork = phil_id;
+    int right_fork = (phil_id + 1) % N;
+
+    int obtained_left = 0;
+    int obtained_right = 0;
+    do {
+        give_away(&forks[left_fork], phil_id);
+        if (!obtained_left && !forks[left_fork].clean) pthread_cond_wait(&forks[left_fork].cv, &mtx);
+        obtained_left = 1;
+
+        give_away(&forks[right_fork], phil_id);
+        if (!obtained_right && !forks[right_fork].clean) pthread_cond_wait(&forks[right_fork].cv, &mtx);
+        obtained_right = 1;
+    } while (!(obtained_left && obtained_right));
+
+    states[phil_id] = EATING;
+    pthread_mutex_unlock(&mtx);
+    return NULL;
+}
+
+void done_eating(int phil_id) {
+    pthread_mutex_lock(&mtx);
+    pthread_mutex_lock(&c);
+    printf("Philosopher %d has finished eating.\n", phil_id);
+    pthread_mutex_unlock(&c);
+
+    int left_fork = phil_id;
+    int right_fork = (phil_id + 1) % N;
+
+    forks[left_fork].clean = 0;
+    forks[right_fork].clean = 0;
+
+    if (forks[left_fork].requested) {
+        forks[left_fork].requested = 0;
+        pthread_cond_broadcast(&forks[left_fork].cv);
+    }
+
+    if (forks[right_fork].requested) {
+        forks[right_fork].requested = 0;
+        pthread_cond_broadcast(&forks[right_fork].cv);
+    }
+
+    states[phil_id] = THINKING;
+    pthread_mutex_unlock(&mtx);
+}
+
+void display_status() {
+    system("clear");
+    printf("id \t states \n");
+    for (int i = 0; i < N; i++) {
+        printf("%d\t%d\n", i, states[i]);
+    }
+}
+
+void *philosopher(void *arg) {
+    int phil_id = *((int *)arg);
+    while (1) {
+        pthread_mutex_lock(&c);
+        printf("Philosopher %d is thinking.\n", phil_id);
+        pthread_mutex_unlock(&c);
+
+        usleep(100000); // 100 milliseconds
+
+        start_eating(&phil_id);
+
+        pthread_mutex_lock(&c);
+        printf("Philosopher %d is eating.\n", phil_id);
+        pthread_mutex_unlock(&c);
+
+        usleep(100000); // 100 milliseconds
+
+        done_eating(phil_id);
+    }
+    return NULL;
+}
+
+int main() {
+    pthread_t philosophers[N];
+    int ids[N];
+    for (int i = 0; i < N; ++i) {
+        forks[i].owner = i;
+        forks[i].clean = 0;
+        forks[i].requested = 0;
+        pthread_cond_init(&forks[i].cv, NULL);
+        ids[i] = i;
+        pthread_create(&philosophers[i], NULL, philosopher, &ids[i]);
+    }
+    for (int i = 0; i < N; ++i) {
+        pthread_join(philosophers[i], NULL);
+    }
+    display_status();
+    return 0;
+}
